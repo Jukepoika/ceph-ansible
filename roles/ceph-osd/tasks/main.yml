@@ -39,10 +39,14 @@
   include_tasks: common.yml
 
 - name: set noup flag
-  command: "{{ hostvars[groups[mon_group_name][0]]['container_exec_cmd'] | default('') }} ceph --cluster {{ cluster }} osd set noup"
+  ceph_osd_flag:
+    name: noup
+    cluster: "{{ cluster }}"
+  environment:
+    CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+    CEPH_CONTAINER_BINARY: "{{ container_binary }}"
   delegate_to: "{{ groups[mon_group_name][0] }}"
   run_once: True
-  changed_when: False
   when:
     - not rolling_update | default(False) | bool
     - not switch_to_containers | default(False) | bool
@@ -67,9 +71,14 @@
   include_tasks: start_osds.yml
 
 - name: unset noup flag
-  command: "{{ hostvars[groups[mon_group_name][0]]['container_exec_cmd'] | default('') }} ceph --cluster {{ cluster }} osd unset noup"
+  ceph_osd_flag:
+    name: noup
+    cluster: "{{ cluster }}"
+    state: absent
+  environment:
+    CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+    CEPH_CONTAINER_BINARY: "{{ container_binary }}"
   delegate_to: "{{ groups[mon_group_name][0] }}"
-  changed_when: False
   when:
     - not rolling_update | default(False) | bool
     - not switch_to_containers | default(False) | bool
@@ -88,10 +97,12 @@
   when:
     - not ansible_check_mode
     - inventory_hostname == ansible_play_hosts_all | last
+  tags: wait_all_osds_up
 
 - name: include crush_rules.yml
   include_tasks: crush_rules.yml
   when: hostvars[groups[mon_group_name][0]]['crush_rule_config'] | default(crush_rule_config) | bool
+  tags: wait_all_osds_up
 
 # Create the pools listed in openstack_pools
 - name: include openstack_config.yml
@@ -101,3 +112,4 @@
     - not rolling_update | default(False) | bool
     - openstack_config | bool
     - inventory_hostname == groups[osd_group_name] | last
+  tags: wait_all_osds_up

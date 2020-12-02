@@ -18,6 +18,10 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 from ansible.module_utils.basic import AnsibleModule
+try:
+    from ansible.module_utils.ca_common import is_containerized, container_exec
+except ImportError:
+    from module_utils.ca_common import is_containerized, container_exec
 import datetime
 import json
 import os
@@ -79,8 +83,9 @@ options:
             return a json output.
             If 'info' is used, the module will return in a json format the
             description of a given keyring.
+            If 'generate_secret' is used, the module will simply output a cephx keyring.
         required: false
-        choices: ['present', 'update', 'absent', 'list', 'info', 'fetch_initial_keys']
+        choices: ['present', 'update', 'absent', 'list', 'info', 'fetch_initial_keys', 'generate_secret']
         default: present
     caps:
         description:
@@ -223,36 +228,6 @@ def fatal(message, module):
         module.fail_json(msg=message, rc=1)
     else:
         raise(Exception(message))
-
-
-def container_exec(binary, container_image):
-    '''
-    Build the docker CLI to run a command inside a container
-    '''
-
-    container_binary = os.getenv('CEPH_CONTAINER_BINARY')
-    command_exec = [container_binary,
-                    'run',
-                    '--rm',
-                    '--net=host',
-                    '-v', '/etc/ceph:/etc/ceph:z',
-                    '-v', '/var/lib/ceph/:/var/lib/ceph/:z',
-                    '-v', '/var/log/ceph/:/var/log/ceph/:z',
-                    '--entrypoint=' + binary, container_image]
-    return command_exec
-
-
-def is_containerized():
-    '''
-    Check if we are running on a containerized cluster
-    '''
-
-    if 'CEPH_CONTAINER_IMAGE' in os.environ:
-        container_image = os.getenv('CEPH_CONTAINER_IMAGE')
-    else:
-        container_image = None
-
-    return container_image
 
 
 def generate_secret():
@@ -517,7 +492,8 @@ def run_module():
     module_args = dict(
         cluster=dict(type='str', required=False, default='ceph'),
         name=dict(type='str', required=False),
-        state=dict(type='str', required=False, default='present', choices=['present', 'update', 'absent', 'list', 'info', 'fetch_initial_keys']),
+        state=dict(type='str', required=False, default='present', choices=['present', 'update', 'absent',
+                                                                           'list', 'info', 'fetch_initial_keys', 'generate_secret']),
         caps=dict(type='dict', required=False, default=None),
         secret=dict(type='str', required=False, default=None, no_log=True),
         import_key=dict(type='bool', required=False, default=True),
@@ -703,9 +679,12 @@ def run_module():
             file_args = module.load_file_common_arguments(module.params)
             file_args['path'] = key_path
             module.set_fs_attributes_if_different(file_args, False)
-    else:
-        module.fail_json(
-            msg='State must either be "present" or "absent" or "list" or "info" or "fetch_initial_keys".', changed=False, rc=1)  # noqa E501
+    elif state == "generate_secret":
+        out = generate_secret().decode()
+        cmd = ''
+        rc = 0
+        err = ''
+        changed = True
 
     endd = datetime.datetime.now()
     delta = endd - startd

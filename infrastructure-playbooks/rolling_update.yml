@@ -99,7 +99,9 @@
         - containerized_deployment | bool
         - ceph_docker_registry_auth | bool
 
-    - set_fact: rolling_update=true
+    - name: set_fact rolling_update
+      set_fact:
+        rolling_update: true
 
 - name: upgrade ceph mon cluster
   vars:
@@ -344,7 +346,12 @@
         tasks_from: container_binary.yml
 
     - name: set osd flags
-      command: "{{ container_exec_cmd | default('') }} ceph --cluster {{ cluster }} osd set {{ item }}"
+      ceph_osd_flag:
+        name: "{{ item }}"
+        cluster: "{{ cluster }}"
+      environment:
+        CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+        CEPH_CONTAINER_BINARY: "{{ container_binary }}"
       with_items:
         - noout
         - nodeep-scrub
@@ -365,7 +372,7 @@
         name: ceph-facts
 
     - name: get osd numbers - non container
-      shell: "if [ -d /var/lib/ceph/osd ] ; then ls /var/lib/ceph/osd | sed 's/.*-//' ; fi"
+      shell: if [ -d /var/lib/ceph/osd ] ; then ls /var/lib/ceph/osd | sed 's/.*-//' ; fi  # noqa 306
       register: osd_ids
       changed_when: false
 
@@ -400,23 +407,24 @@
         name: ceph-osd
 
     - name: scan ceph-disk osds with ceph-volume if deploying nautilus
-      command: "ceph-volume --cluster={{ cluster }} simple scan --force"
+      ceph_volume_simple_scan:
+        cluster: "{{ cluster }}"
+        force: true
       environment:
         CEPH_VOLUME_DEBUG: "{{ ceph_volume_debug }}"
-      when:
-        - ceph_release in ["nautilus", "octopus"]
-        - not containerized_deployment | bool
+      when: not containerized_deployment | bool
 
     - name: activate scanned ceph-disk osds and migrate to ceph-volume if deploying nautilus
-      command: "ceph-volume --cluster={{ cluster }} simple activate --all"
+      ceph_volume_simple_activate:
+        cluster: "{{ cluster }}"
+        osd_all: true
       environment:
         CEPH_VOLUME_DEBUG: "{{ ceph_volume_debug }}"
-      when:
-        - ceph_release in ["nautilus", "octopus"]
-        - not containerized_deployment | bool
+      when: not containerized_deployment | bool
 
     - name: get num_pgs - non container
       command: "{{ container_exec_cmd_update_osd|default('') }} ceph --cluster {{ cluster }} pg stat --format json"
+      changed_when: false
       register: ceph_pgs
       delegate_to: "{{ groups[mon_group_name][0] }}"
 
@@ -443,13 +451,14 @@
         name: ceph-facts
         tasks_from: container_binary.yml
 
-    - name: set_fact container_exec_cmd_osd
-      set_fact:
-        container_exec_cmd_update_osd: "{{ container_binary }} exec ceph-mon-{{ hostvars[groups[mon_group_name][0]]['ansible_hostname'] }}"
-      when: containerized_deployment | bool
-
     - name: unset osd flags
-      command: "{{ container_exec_cmd_update_osd | default('') }} ceph osd unset {{ item }} --cluster {{ cluster }}"
+      ceph_osd_flag:
+        name: "{{ item }}"
+        cluster: "{{ cluster }}"
+        state: absent
+      environment:
+        CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+        CEPH_CONTAINER_BINARY: "{{ container_binary }}"
       with_items:
         - noout
         - nodeep-scrub
@@ -981,6 +990,7 @@
 
     - name: show ceph status
       command: "{{ container_exec_cmd_status|default('') }} ceph --cluster {{ cluster }} -s"
+      changed_when: false
       run_once: True
       delegate_to: "{{ groups[mon_group_name][0] }}"
 
@@ -988,3 +998,4 @@
       command: "{{ container_exec_cmd_status|default('') }} ceph --cluster {{ cluster }} versions"
       run_once: True
       delegate_to: "{{ groups[mon_group_name][0] }}"
+      changed_when: false

@@ -54,7 +54,12 @@
           run_once: true
 
         - name: get ceph-volume lvm inventory data
-          command: "{{ container_run_cmd }} --cluster {{ cluster }} inventory --format json"
+          ceph_volume:
+            cluster: "{{ cluster }}"
+            action: inventory
+          environment:
+            CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+            CEPH_CONTAINER_BINARY: "{{ container_binary }}"
           register: ceph_volume_inventory
 
         - name: set_fact inventory
@@ -78,14 +83,26 @@
               with_items: "{{ ceph_disk_osds_devices | default([]) }}"
 
             - name: get simple scan data
-              command: "{{ container_run_cmd }} --cluster {{ cluster }} simple scan {{ item.item + 'p1' if item.item is match('/dev/(cciss/c[0-9]d[0-9]|nvme[0-9]n[0-9]){1,2}$') else item.item + '1' }} --stdout"
+              ceph_volume_simple_scan:
+                path: "{{ item.item + 'p1' if item.item is match('/dev/(cciss/c[0-9]d[0-9]|nvme[0-9]n[0-9]){1,2}$') else item.item + '1' }}"
+                cluster: "{{ cluster }"
+                stdout: true
+              environment:
+                CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+                CEPH_CONTAINER_BINARY: "{{ container_binary }}"
               register: simple_scan
               with_items: "{{ partlabel.results | default([]) }}"
               when: item.stdout == 'ceph data'
               ignore_errors: true
 
             - name: mark out osds
-              command: "{{ container_exec_cmd }} ceph --cluster {{ cluster }} osd out {{ (item.0.stdout | from_json).whoami }}"
+              ceph_osd:
+                ids: "{{ (item.0.stdout | from_json).whoami }}"
+                cluster: "{{ cluster }}"
+                state: out
+              environment:
+                CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+                CEPH_CONTAINER_BINARY: "{{ container_binary }}"
               with_together:
                 - "{{ simple_scan.results }}"
                 - "{{ partlabel.results }}"
@@ -146,14 +163,28 @@
                 - (item.0.stdout | from_json).encrypted | default(False) | bool
 
             - name: zap data devices
-              command: "{{ container_run_cmd }} --cluster {{ cluster }} lvm zap --destroy {{ (item.0.stdout | from_json).data.path }}"
+              ceph_volume:
+                cluster: "{{ cluster }}"
+                action: zap
+                destroy: true
+                data: "{{ (item.0.stdout | from_json).data.path }}"
+              environment:
+                CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+                CEPH_CONTAINER_BINARY: "{{ container_binary }}"
               with_together:
                 - "{{ simple_scan.results }}"
                 - "{{ partlabel.results }}"
               when: item.1.stdout == 'ceph data'
 
             - name: zap journal devices
-              command: "{{ container_run_cmd }} --cluster {{ cluster }} lvm zap --destroy {{ (item.0.stdout | from_json).journal.path }}"
+              ceph_volume:
+                cluster: "{{ cluster }}"
+                action: zap
+                destroy: true
+                journal: "{{ (item.0.stdout | from_json).journal.path }}"
+              environment:
+                CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+                CEPH_CONTAINER_BINARY: "{{ container_binary }}"
               with_together:
                 - "{{ simple_scan.results }}"
                 - "{{ partlabel.results }}"
@@ -162,7 +193,12 @@
                 - (item.0.stdout | from_json).journal.path is defined
 
         - name: get ceph-volume lvm list data
-          command: "{{ container_run_cmd }} --cluster {{ cluster }} lvm list --format json"
+          ceph_volume:
+            cluster: "{{ cluster }}"
+            action: list
+          environment:
+            CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+            CEPH_CONTAINER_BINARY: "{{ container_binary }}"
           register: ceph_volume_lvm_list
 
         - name: set_fact _lvm_list
@@ -173,8 +209,13 @@
         - name: ceph-volume prepared OSDs related tasks
           block:
             - name: mark out osds
-              command: "{{ container_exec_cmd }} ceph --cluster {{ cluster }} osd out {{ item }}"
-              with_items: "{{ (ceph_volume_lvm_list.stdout | default('{}') | from_json).keys() | list }}"
+              ceph_osd:
+                ids: "{{ (ceph_volume_lvm_list.stdout | default('{}') | from_json).keys() | list }}"
+                cluster: "{{ cluster }}"
+                state: out
+              environment:
+                CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+                CEPH_CONTAINER_BINARY: "{{ container_binary }}"
               delegate_to: "{{ groups[mon_group_name][0] }}"
               run_once: true
 
@@ -196,8 +237,13 @@
                 - item.type == 'data'
 
             - name: mark down osds
-              command: "{{ container_exec_cmd }} ceph --cluster {{ cluster }} osd down {{ item }}"
-              with_items: "{{ (ceph_volume_lvm_list.stdout | default('{}') | from_json).keys() | list }}"
+              ceph_osd:
+                ids: "{{ (ceph_volume_lvm_list.stdout | default('{}') | from_json).keys() | list }}"
+                cluster: "{{ cluster }}"
+                state: down
+              environment:
+                CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+                CEPH_CONTAINER_BINARY: "{{ container_binary }}"
               delegate_to: "{{ groups[mon_group_name][0] }}"
               run_once: true
 
@@ -295,8 +341,13 @@
             - "{{ ((osd_tree.stdout | default('{}') | from_json).nodes | selectattr('name', 'match', inventory_hostname) | map(attribute='children') | list) }}"
 
         - name: purge osd(s) from the cluster
-          command: >
-            {{ container_exec_cmd }} ceph --cluster {{ cluster }} osd purge {{ item }} --yes-i-really-mean-it
+          ceph_osd:
+            ids: "{{ item }}"
+            cluster: "{{ cluster }}"
+            state: purge
+          environment:
+            CEPH_CONTAINER_IMAGE: "{{ ceph_docker_registry + '/' + ceph_docker_image + ':' + ceph_docker_image_tag if containerized_deployment | bool else None }}"
+            CEPH_CONTAINER_BINARY: "{{ container_binary }}"
           run_once: true
           delegate_to: "{{ groups[mon_group_name][0] }}"
           with_items: "{{ osd_ids }}"

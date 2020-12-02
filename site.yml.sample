@@ -259,6 +259,7 @@
   gather_facts: false
   become: True
   any_errors_fatal: true
+  tags: 'ceph_client'
   pre_tasks:
     - name: set ceph client install 'In Progress'
       run_once: true
